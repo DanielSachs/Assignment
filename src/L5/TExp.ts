@@ -230,14 +230,17 @@ export const unparseTExp = (te: TExp): Result<string> => {
         isBoolTExp(x) ? makeOk('boolean') :
         isStrTExp(x) ? makeOk('string') :
         isVoidTExp(x) ? makeOk('void') :
-        isEmptyTVar(x) ? makeOk(x.var) :
-        isTVar(x) ? up(tvarContents(x)) :
+        isTVar(x) ? (() => {
+            // IMPORTANT: Dereference the type variable to get its actual content
+            const contents = tvarContents(x);
+            return contents !== undefined ? up(contents) : makeOk(x.var);
+        })() :
         isProcTExp(x) ? bind(unparseTuple(x.paramTEs), (paramTEs: string[]) =>
                             mapv(unparseTExp(x.returnTE), (returnTE: string) =>
                                 [...paramTEs, '->', returnTE])) :
         isPairTExp(x) ? bind(unparseTExp(x.TLeft), (leftTE: string) =>
-                        mapv(unparseTExp(x.TRight), (rightTE: string) =>
-                            ['Pair', leftTE, rightTE])) :
+                        bind(unparseTExp(x.TRight), (rightTE: string) =>
+                             makeOk(`(Pair ${leftTE} ${rightTE})`))) :
         isEmptyTupleTExp(x) ? makeOk("Empty") :
         isNonEmptyTupleTExp(x) ? unparseTuple(x.TEs) :
         x === undefined ? makeFailure("Undefined TVar") :
@@ -248,7 +251,7 @@ export const unparseTExp = (te: TExp): Result<string> => {
                 (x: string | string[]) => isString(x) ? x :
                                           isArray(x) ? `(${x.join(' ')})` :
                                           x);
-}
+};
 
 // ============================================================
 // equivalentTEs: 2 TEs are equivalent up to variable renaming.
