@@ -4,7 +4,7 @@ import { equals, map, zipWith } from 'ramda';
 import { isAppExp, isBoolExp, isDefineExp, isIfExp, isLetrecExp, isLetExp, isLitExp, isNumExp,
          isPrimOp, isProcExp, isProgram, isSetExp, isStrExp, isVarRef, parseL5Exp, unparse,
          AppExp, BoolExp, DefineExp, Exp, IfExp, LetrecExp, LetExp, LitExp, NumExp,
-         Parsed, PrimOp, ProcExp, Program, SetExp, StrExp } from "./L5-ast";
+         Parsed, PrimOp, ProcExp, Program, SetExp, StrExp, parseL5Program } from "./L5-ast";
 import { applyTEnv, makeEmptyTEnv, makeExtendTEnv, TEnv } from "./TEnv";
 import { isPairTExp, isProcTExp, makeBoolTExp, makeNumTExp, makePairTExp, makeProcTExp, makeStrTExp, makeVoidTExp,
          parseTE, unparseTExp,
@@ -344,5 +344,5 @@ export const typeofProgram = (exp: Program, tenv: TEnv): Result<TExp> => {
 
 export const L5programTypeof = (concreteExp: string): Result<string> =>
     bind(p(concreteExp), (x) =>
-        bind(parseL5Exp(x), (e: Exp) => 
-            bind(typeofExp(e, makeEmptyTEnv()), unparseTExp)));
+        bind(parseL5Program(x), (program: Program) => 
+            bind(typeofProgram(program, makeEmptyTEnv()), unparseTExp)));
