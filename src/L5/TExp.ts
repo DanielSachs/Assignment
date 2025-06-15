@@ -167,6 +167,7 @@ export const parseTExp = (texp: Sexp): Result<TExp> =>
     (texp === "boolean") ? makeOk(makeBoolTExp()) :
     (texp === "void") ? makeOk(makeVoidTExp()) :
     (texp === "string") ? makeOk(makeStrTExp()) :
+    (texp === "literal") ? makeOk(makeTVar("literal")) :
     isString(texp) ? makeOk(makeTVar(texp)) :
     isArray(texp) ? parseCompoundTExp(texp) :
     makeFailure(`Unexpected TExp - ${format(texp)}`);
