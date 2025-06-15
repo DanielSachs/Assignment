@@ -6,23 +6,26 @@
 
 ;; Type language
 ;; <texp>         ::= <atomic-te> | <compound-te> | <tvar>
-;; <atomic-te>    ::= <num-te> | <bool-te> | <void-te>
+;; <atomic-te>    ::= <num-te> | <bool-te> | <void-te> | <str-te>
 ;; <num-te>       ::= number   // num-te()
 ;; <bool-te>      ::= boolean  // bool-te()
 ;; <str-te>       ::= string   // str-te()
 ;; <void-te>      ::= void     // void-te()
-;; <compound-te>  ::= <proc-te> | <tuple-te>
-;; <non-tuple-te> ::= <atomic-te> | <proc-te> | <tvar>
+;; <compound-te>  ::= <proc-te> | <tuple-te> | <pair-te>
+;; <non-tuple-te> ::= <atomic-te> | <proc-te> | <tvar> | <pair-te>
 ;; <proc-te>      ::= [ <tuple-te> -> <non-tuple-te> ] // proc-te(param-tes: list(te), return-te: te)
 ;; <tuple-te>     ::= <non-empty-tuple-te> | <empty-te>
 ;; <non-empty-tuple-te> ::= ( <non-tuple-te> *)* <non-tuple-te> // tuple-te(tes: list(te))
 ;; <empty-te>     ::= Empty
+;; <pair-te>      ::= (Pair <non-tuple-te> <non-tuple-te>) // pair-te(left: te, right: te)
 ;; <tvar>         ::= a symbol starting with T // tvar(id: Symbol, contents; Box(string|boolean))
 
 ;; Examples of type expressions
 ;; number
 ;; boolean
 ;; void
+;; (Pair number string)
+;; (Pair (Pair number string) boolean)
 ;; [number -> boolean]
 ;; [number * number -> boolean]
 ;; [number -> [number -> boolean]]
@@ -46,12 +49,12 @@ export type AtomicTExp = NumTExp | BoolTExp | StrTExp | VoidTExp;
 export const isAtomicTExp = (x: any): x is AtomicTExp =>
     isNumTExp(x) || isBoolTExp(x) || isStrTExp(x) || isVoidTExp(x);
 
-export type CompoundTExp = ProcTExp | TupleTExp;
-export const isCompoundTExp = (x: any): x is CompoundTExp => isProcTExp(x) || isTupleTExp(x);
+export type CompoundTExp = ProcTExp | TupleTExp | PairTExp;
+export const isCompoundTExp = (x: any): x is CompoundTExp => isProcTExp(x) || isTupleTExp(x) || isPairTExp(x);
 
-export type NonTupleTExp = AtomicTExp | ProcTExp | TVar;
+export type NonTupleTExp = AtomicTExp | ProcTExp | TVar | PairTExp;
 export const isNonTupleTExp = (x: any): x is NonTupleTExp =>
-    isAtomicTExp(x) || isProcTExp(x) || isTVar(x);
+    isAtomicTExp(x) || isProcTExp(x) || isTVar(x) || isPairTExp(x);
 
 export type NumTExp = { tag: "NumTExp" };
 export const makeNumTExp = (): NumTExp => ({tag: "NumTExp"});
@@ -77,6 +80,15 @@ export const isProcTExp = (x: any): x is ProcTExp => x.tag === "ProcTExp";
 // Uniform access to all components of a ProcTExp
 export const procTExpComponents = (pt: ProcTExp): TExp[] =>
     [...pt.paramTEs, pt.returnTE];
+
+// pair-te(left: te, right: te)
+export type PairTExp = { tag: "PairTExp"; TLeft: TExp; TRight: TExp; };
+export const makePairTExp = (left: TExp, right: TExp): PairTExp =>
+    ({tag: "PairTExp", TLeft: left, TRight: right});
+export const isPairTExp = (x: any): x is PairTExp => x.tag === "PairTExp";
+// Uniform access to all components of a PairTExp
+export const pairTExpComponents = (pt: PairTExp): TExp[] =>
+    [pt.TLeft, pt.TRight];
 
 export type TupleTExp = NonEmptyTupleTExp | EmptyTupleTExp;
 export const isTupleTExp = (x: any): x is TupleTExp =>
@@ -146,6 +158,7 @@ export const parseTE = (t: string): Result<TExp> =>
 ;; parseTExp("number") => 'num-te
 ;; parseTExp('boolean') => 'bool-te
 ;; parseTExp('T1') => '(tvar T1)
+;; parseTExp('(Pair number string)') => '(pair-te num-te str-te)
 ;; parseTExp('(T * T -> boolean)') => '(proc-te ((tvar T) (tvar T)) bool-te)
 ;; parseTExp('(number -> (number -> number)') => '(proc-te (num-te) (proc-te (num-te) num-te))
 */
@@ -162,8 +175,17 @@ export const parseTExp = (texp: Sexp): Result<TExp> =>
 ;; expected structure: (<params> -> <returnte>)
 ;; expected exactly one -> in the list
 ;; We do not accept (a -> b -> c) - must parenthesize
+;; OR: (Pair T1 T2)
 */
-const parseCompoundTExp = (texps: Sexp[]): Result<ProcTExp> => {
+const parseCompoundTExp = (texps: Sexp[]): Result<TExp> => {
+    // Check for Pair type: (Pair T1 T2)
+    if (texps.length === 3 && texps[0] === 'Pair') {
+        return bind(parseTExp(texps[1]), (leftTE: TExp) =>
+               mapv(parseTExp(texps[2]), (rightTE: TExp) =>
+                    makePairTExp(leftTE, rightTE)));
+    }
+    
+    // Original procedure type parsing
     const pos = texps.indexOf('->');
     return (pos === -1)  ? makeFailure(`Procedure type expression without -> - ${format(texps)}`) :
            (pos === 0) ? makeFailure(`No param types in proc texp - ${format(texps)}`) :
@@ -212,6 +234,9 @@ export const unparseTExp = (te: TExp): Result<string> => {
         isProcTExp(x) ? bind(unparseTuple(x.paramTEs), (paramTEs: string[]) =>
                             mapv(unparseTExp(x.returnTE), (returnTE: string) =>
                                 [...paramTEs, '->', returnTE])) :
+        isPairTExp(x) ? bind(unparseTExp(x.TLeft), (leftTE: string) =>
+                        mapv(unparseTExp(x.TRight), (rightTE: string) =>
+                            ['Pair', leftTE, rightTE])) :
         isEmptyTupleTExp(x) ? makeOk("Empty") :
         isNonEmptyTupleTExp(x) ? unparseTuple(x.TEs) :
         x === undefined ? makeFailure("Undefined TVar") :
@@ -268,6 +293,7 @@ const matchTVarsInTProcs = <T1, T2>(te1: TExp, te2: TExp,
         succ: (mapping: Array<Pair<TVar, TVar>>) => T1,
         fail: () => T2): T1 | T2 =>
     (isProcTExp(te1) && isProcTExp(te2)) ? matchTVarsInTEs(procTExpComponents(te1), procTExpComponents(te2), succ, fail) :
+    (isPairTExp(te1) && isPairTExp(te2)) ? matchTVarsInTEs(pairTExpComponents(te1), pairTExpComponents(te2), succ, fail) :
     fail();
 
 const matchTVarsInTEs = <T1, T2>(te1: TExp[], te2: TExp[],
