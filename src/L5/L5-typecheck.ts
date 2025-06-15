@@ -81,7 +81,7 @@ const numOpTExp = parseTE('(number * number -> number)');
 const numCompTExp = parseTE('(number * number -> boolean)');
 const boolOpTExp = parseTE('(boolean * boolean -> boolean)');
 
-// Pair operations and other primitives with proper type signatures
+// Pair operations and other primitives
 export const typeofPrim = (p: PrimOp): Result<TExp> =>
     (p.op === '+') ? numOpTExp :
     (p.op === '-') ? numOpTExp :
@@ -359,10 +359,7 @@ export const typeofProgram = (exp: Program, tenv: TEnv): Result<TExp> => {
         const [firstExp, ...restExps] = expressions;
         
         if (isDefineExp(firstExp)) {
-            // For define expressions:
-            // 1. Type check the define expression itself (should return void)
-            // 2. Extend the environment with the new variable binding
-            // 3. Continue with the rest of the expressions using the extended environment
+            // Handle define expressions by extending the environment
             const defineTypeResult = typeofDefine(firstExp, currentTEnv);
             return bind(defineTypeResult, _ => {
                 const extendedTEnv = makeExtendTEnv([firstExp.var.var], [firstExp.var.texp], currentTEnv);
@@ -375,10 +372,7 @@ export const typeofProgram = (exp: Program, tenv: TEnv): Result<TExp> => {
                 }
             });
         } else {
-            // For non-define expressions:
-            // 1. Type check the expression
-            // 2. If this is the last expression, return its type
-            // 3. Otherwise, continue with the rest using the same environment
+            // Handle non-define expressions
             const expTypeResult = typeofExp(firstExp, currentTEnv);
             return bind(expTypeResult, (expType: TExp) => {
                 if (restExps.length === 0) {
