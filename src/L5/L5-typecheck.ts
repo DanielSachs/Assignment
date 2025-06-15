@@ -8,8 +8,7 @@ import { isAppExp, isBoolExp, isDefineExp, isIfExp, isLetrecExp, isLetExp, isLit
 import { applyTEnv, makeEmptyTEnv, makeExtendTEnv, TEnv } from "./TEnv";
 import { isPairTExp, isProcTExp, makeBoolTExp, makeNumTExp, makePairTExp, makeProcTExp, makeStrTExp, makeVoidTExp,
          parseTE, unparseTExp,
-         BoolTExp, NumTExp, PairTExp, StrTExp, TExp, VoidTExp,
-         isTVar, tvarSetContents, tvarContents } from "./TExp";
+         BoolTExp, NumTExp, PairTExp, StrTExp, TExp, VoidTExp } from "./TExp";
 import { isEmpty, allT, first, rest, NonEmptyList, List, isNonEmptyList } from '../shared/list';
 import { Result, makeFailure, bind, makeOk, zipWithResult } from '../shared/result';
 import { parse as p } from "../shared/parser";
@@ -20,64 +19,12 @@ import { isSymbolSExp, isCompoundSExp, SExpValue } from './L5-value';
 // as part of a fully-annotated type check process of exp.
 // Return an error if the types are different - true otherwise.
 // Exp is only passed for documentation purposes.
-const checkEqualType = (te1: TExp, te2: TExp, exp: Exp): Result<true> => {
-    // Handle type variable unification
-    if (isTVar(te1) && !isTVar(te2)) {
-        // Unify type variable te1 with concrete type te2
-        if (tvarContents(te1) === undefined) {
-            tvarSetContents(te1, te2);
-            return makeOk(true);
-        } else {
-            return checkEqualType(tvarContents(te1)!, te2, exp);
-        }
-    } else if (!isTVar(te1) && isTVar(te2)) {
-        // Unify type variable te2 with concrete type te1
-        if (tvarContents(te2) === undefined) {
-            tvarSetContents(te2, te1);
-            return makeOk(true);
-        } else {
-            return checkEqualType(te1, tvarContents(te2)!, exp);
-        }
-    } else if (isTVar(te1) && isTVar(te2)) {
-        // Both are type variables
-        const contents1 = tvarContents(te1);
-        const contents2 = tvarContents(te2);
-        
-        if (contents1 !== undefined && contents2 !== undefined) {
-            return checkEqualType(contents1, contents2, exp);
-        } else if (contents1 !== undefined) {
-            return checkEqualType(contents1, te2, exp);
-        } else if (contents2 !== undefined) {
-            return checkEqualType(te1, contents2, exp);
-        } else {
-            // Both are unbound type variables - unify them
-            tvarSetContents(te1, te2);
-            return makeOk(true);
-        }
-    } else if (isPairTExp(te1) && isPairTExp(te2)) {
-        // Handle pair type unification: (Pair T1 T2) with (Pair number boolean)
-        const leftCheck = checkEqualType(te1.TLeft, te2.TLeft, exp);
-        return bind(leftCheck, _ => checkEqualType(te1.TRight, te2.TRight, exp));
-    } else if (isProcTExp(te1) && isProcTExp(te2)) {
-        // Handle procedure type unification
-        if (te1.paramTEs.length !== te2.paramTEs.length) {
-            return bind(unparseTExp(te1), (te1str: string) =>
-                   bind(unparseTExp(te2), (te2str: string) =>
-                        makeFailure<true>(`Incompatible procedure types: ${te1str} and ${te2str} in ${format(exp)}`)));
-        }
-        
-        // Check all parameter types
-        const paramChecks = zipWithResult((p1, p2) => checkEqualType(p1, p2, exp), te1.paramTEs, te2.paramTEs);
-        return bind(paramChecks, _ => checkEqualType(te1.returnTE, te2.returnTE, exp));
-    } else {
-        // Both are concrete types - use original logic
-        return equals(te1, te2) ? makeOk(true) :
-            bind(unparseTExp(te1), (te1: string) =>
-                bind(unparseTExp(te2), (te2: string) =>
-                    bind(unparse(exp), (exp: string) => 
-                        makeFailure<true>(`Incompatible types: ${te1} and ${te2} in ${exp}`))));
-    }
-};
+const checkEqualType = (te1: TExp, te2: TExp, exp: Exp): Result<true> =>
+    equals(te1, te2) ? makeOk(true) :
+    bind(unparseTExp(te1), (te1: string) =>
+        bind(unparseTExp(te2), (te2: string) =>
+            bind(unparse(exp), (exp: string) => 
+                makeFailure<true>(`Incompatible types: ${te1} and ${te2} in ${exp}`))));
 
 // Compute the type of L5 AST exps to TE
 // ===============================================
@@ -203,21 +150,57 @@ export const typeofProc = (proc: ProcExp, tenv: TEnv): Result<TExp> => {
 //      type<randn>(tenv) = tn
 // then type<(rator rand1...randn)>(tenv) = t
 // We also check the correct number of arguments is passed.
-export const typeofApp = (app: AppExp, tenv: TEnv): Result<TExp> =>
-    bind(typeofExp(app.rator, tenv), (ratorTE: TExp) => {
-        if (! isProcTExp(ratorTE)) {
+export const typeofApp = (app: AppExp, tenv: TEnv): Result<TExp> => {
+    // Special handling for car and cdr primitives
+    if (isPrimOp(app.rator)) {
+        const primOp = app.rator as PrimOp; // Type assertion after guard
+        
+        if (primOp.op === 'car' || primOp.op === 'cdr') {
+            if (app.rands.length !== 1) {
+                return makeFailure(`${primOp.op} expects exactly 1 argument`);
+            }
+            return bind(typeofExp(app.rands[0], tenv), (argType: TExp) => {
+                if (isPairTExp(argType)) {
+                    return primOp.op === 'car' ? 
+                        makeOk(argType.TLeft) : 
+                        makeOk(argType.TRight);
+                }
+                return bind(unparseTExp(argType), (argTypeStr: string) =>
+                    makeFailure(`${primOp.op} expects a pair type, got ${argTypeStr}`));
+            });
+        }
+        
+        // Special handling for cons primitive
+        if (primOp.op === 'cons') {
+            if (app.rands.length !== 2) {
+                return makeFailure("cons expects exactly 2 arguments");
+            }
+            const leftTE = typeofExp(app.rands[0], tenv);
+            const rightTE = typeofExp(app.rands[1], tenv);
+            return bind(leftTE, (leftType: TExp) =>
+                bind(rightTE, (rightType: TExp) =>
+                    makeOk(makePairTExp(leftType, rightType))));
+        }
+    }
+
+    // Continue with regular procedure application handling
+    return bind(typeofExp(app.rator, tenv), (ratorTE: TExp) => {
+        if (!isProcTExp(ratorTE)) {
             return bind(unparseTExp(ratorTE), (rator: string) =>
-                        bind(unparse(app), (exp: string) =>
-                            makeFailure<TExp>(`Application of non-procedure: ${rator} in ${exp}`)));
+                bind(unparse(app), (exp: string) =>
+                    makeFailure(`Application of non-procedure: ${rator} in ${exp}`)));
         }
         if (app.rands.length !== ratorTE.paramTEs.length) {
-            return bind(unparse(app), (exp: string) => makeFailure<TExp>(`Wrong parameter numbers passed to proc: ${exp}`));
+            return bind(unparse(app), (exp: string) =>
+                makeFailure(`Wrong parameter count in application: ${exp}`));
         }
-        const constraints = zipWithResult((rand, trand) => bind(typeofExp(rand, tenv), (typeOfRand: TExp) => 
-                                                                checkEqualType(typeOfRand, trand, app)),
-                                          app.rands, ratorTE.paramTEs);
+        const paramTEs = ratorTE.paramTEs;
+        const randsTE = map((rand) => typeofExp(rand, tenv), app.rands);
+        const constraints = zipWithResult((rand, param) => 
+            bind(rand, (rand: TExp) => checkEqualType(rand, param, app)), randsTE, paramTEs);
         return bind(constraints, _ => makeOk(ratorTE.returnTE));
     });
+};
 
 // Purpose: compute the type of a let-exp
 // Typing rule:
@@ -270,11 +253,14 @@ export const typeofLetrec = (exp: LetrecExp, tenv: TEnv): Result<TExp> => {
 //   (define (var : texp) val)
 // If   type<val>(tenv) = texp
 // then type<(define (var : texp) val)>(tenv) = void
-export const typeofDefine = (exp: DefineExp, tenv: TEnv): Result<VoidTExp> => {
-    const valTE = typeofExp(exp.val, tenv);
-    const varTE = exp.var.texp;
-    const constraint = bind(valTE, (valTE: TExp) => checkEqualType(varTE, valTE, exp));
-    return bind(constraint, _ => makeOk(makeVoidTExp()));
+export const typeofDefine = (exp: DefineExp, tenv: TEnv): Result<TExp> => {
+    const varType = exp.var.texp;
+    const valType = typeofExp(exp.val, tenv);
+    
+    return bind(valType, (valTE: TExp) => {
+        const constraint = checkEqualType(valTE, varType, exp);
+        return bind(constraint, _ => makeOk(makeVoidTExp()));
+    });
 };
 
 // Purpose: compute the type of a set expression
