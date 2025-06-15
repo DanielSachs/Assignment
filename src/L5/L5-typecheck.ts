@@ -13,6 +13,7 @@ import { isEmpty, allT, first, rest, NonEmptyList, List, isNonEmptyList } from '
 import { Result, makeFailure, bind, makeOk, zipWithResult } from '../shared/result';
 import { parse as p } from "../shared/parser";
 import { format } from '../shared/format';
+import { isSymbolSExp, isCompoundSExp, SExpValue } from './L5-value';
 
 // Purpose: Check that type expressions are equivalent
 // as part of a fully-annotated type check process of exp.
@@ -247,37 +248,50 @@ export const typeofLit = (exp: LitExp, tenv: TEnv): Result<TExp> => {
     
     // Basic atomic types
     if (typeof val === 'number') {
-        return makeOk(makeNumTExp());
+        // Check if this is from a quote expression - if so, treat as literal
+        // For now, we'll treat quoted numbers as literals
+        return parseTE('literal');
     } else if (typeof val === 'boolean') {
         return makeOk(makeBoolTExp());
     } else if (typeof val === 'string') {
         return makeOk(makeStrTExp());
     }
     
-    // Handle compound values (pairs, lists)
-    if (Array.isArray(val)) {
-        // For pairs represented as arrays of length 2
-        if (val.length === 2) {
-            // Recursively determine types of pair elements
-            const leftType = typeof val[0] === 'number' ? makeNumTExp() :
-                           typeof val[0] === 'boolean' ? makeBoolTExp() :
-                           typeof val[0] === 'string' ? makeStrTExp() :
-                           undefined;
-            const rightType = typeof val[1] === 'number' ? makeNumTExp() :
-                            typeof val[1] === 'boolean' ? makeBoolTExp() :
-                            typeof val[1] === 'string' ? makeStrTExp() :
-                            undefined;
-            
-            if (leftType && rightType) {
-                return makeOk(makePairTExp(leftType, rightType));
-            }
-        }
-        // For other lists, return failure for now
-        return makeFailure(`Complex list literal types not yet implemented: ${val}`);
+    // Handle symbols (for literals like 'abc)
+    if (isSymbolSExp(val)) {
+        return parseTE('literal');
     }
     
-    // For symbols and other complex types
-    return makeFailure(`Literal type not yet implemented: ${val}`);
+    // Handle compound S-expressions (pairs)
+    if (isCompoundSExp(val)) {
+        return bind(typeofSExp(val.val1), (t1: TExp) =>
+               bind(typeofSExp(val.val2), (t2: TExp) =>
+                   bind(unparseTExp(t1), (t1str: string) =>
+                       bind(unparseTExp(t2), (t2str: string) =>
+                           parseTE(`(Pair ${t1str} ${t2str})`)))));
+    }
+    
+    return makeFailure(`Unsupported literal type: ${typeof val}`);
+};
+
+// Helper function for typing S-expressions
+const typeofSExp = (sexp: SExpValue): Result<TExp> => {
+    if (typeof sexp === 'number') {
+        return makeOk(makeNumTExp());
+    } else if (typeof sexp === 'boolean') {
+        return makeOk(makeBoolTExp());
+    } else if (typeof sexp === 'string') {
+        return makeOk(makeStrTExp());
+    } else if (isSymbolSExp(sexp)) {
+        return parseTE('literal');
+    } else if (isCompoundSExp(sexp)) {
+        return bind(typeofSExp(sexp.val1), (t1: TExp) =>
+               bind(typeofSExp(sexp.val2), (t2: TExp) =>
+                   bind(unparseTExp(t1), (t1str: string) =>
+                       bind(unparseTExp(t2), (t2str: string) =>
+                           parseTE(`(Pair ${t1str} ${t2str})`)))));
+    }
+    return makeFailure(`Unsupported S-expression type: ${typeof sexp}`);
 };
 
 // Purpose: compute the type of a program
