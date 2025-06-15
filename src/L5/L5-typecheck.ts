@@ -8,7 +8,8 @@ import { isAppExp, isBoolExp, isDefineExp, isIfExp, isLetrecExp, isLetExp, isLit
 import { applyTEnv, makeEmptyTEnv, makeExtendTEnv, TEnv } from "./TEnv";
 import { isPairTExp, isProcTExp, makeBoolTExp, makeNumTExp, makePairTExp, makeProcTExp, makeStrTExp, makeVoidTExp,
          parseTE, unparseTExp,
-         BoolTExp, NumTExp, PairTExp, StrTExp, TExp, VoidTExp } from "./TExp";
+         BoolTExp, NumTExp, PairTExp, StrTExp, TExp, VoidTExp,
+         isTVar, tvarSetContents, tvarContents } from "./TExp";
 import { isEmpty, allT, first, rest, NonEmptyList, List, isNonEmptyList } from '../shared/list';
 import { Result, makeFailure, bind, makeOk, zipWithResult } from '../shared/result';
 import { parse as p } from "../shared/parser";
@@ -19,12 +20,64 @@ import { isSymbolSExp, isCompoundSExp, SExpValue } from './L5-value';
 // as part of a fully-annotated type check process of exp.
 // Return an error if the types are different - true otherwise.
 // Exp is only passed for documentation purposes.
-const checkEqualType = (te1: TExp, te2: TExp, exp: Exp): Result<true> =>
-  equals(te1, te2) ? makeOk(true) :
-  bind(unparseTExp(te1), (te1: string) =>
-    bind(unparseTExp(te2), (te2: string) =>
-        bind(unparse(exp), (exp: string) => 
-            makeFailure<true>(`Incompatible types: ${te1} and ${te2} in ${exp}`))));
+const checkEqualType = (te1: TExp, te2: TExp, exp: Exp): Result<true> => {
+    // Handle type variable unification
+    if (isTVar(te1) && !isTVar(te2)) {
+        // Unify type variable te1 with concrete type te2
+        if (tvarContents(te1) === undefined) {
+            tvarSetContents(te1, te2);
+            return makeOk(true);
+        } else {
+            return checkEqualType(tvarContents(te1)!, te2, exp);
+        }
+    } else if (!isTVar(te1) && isTVar(te2)) {
+        // Unify type variable te2 with concrete type te1
+        if (tvarContents(te2) === undefined) {
+            tvarSetContents(te2, te1);
+            return makeOk(true);
+        } else {
+            return checkEqualType(te1, tvarContents(te2)!, exp);
+        }
+    } else if (isTVar(te1) && isTVar(te2)) {
+        // Both are type variables
+        const contents1 = tvarContents(te1);
+        const contents2 = tvarContents(te2);
+        
+        if (contents1 !== undefined && contents2 !== undefined) {
+            return checkEqualType(contents1, contents2, exp);
+        } else if (contents1 !== undefined) {
+            return checkEqualType(contents1, te2, exp);
+        } else if (contents2 !== undefined) {
+            return checkEqualType(te1, contents2, exp);
+        } else {
+            // Both are unbound type variables - unify them
+            tvarSetContents(te1, te2);
+            return makeOk(true);
+        }
+    } else if (isPairTExp(te1) && isPairTExp(te2)) {
+        // Handle pair type unification: (Pair T1 T2) with (Pair number boolean)
+        const leftCheck = checkEqualType(te1.TLeft, te2.TLeft, exp);
+        return bind(leftCheck, _ => checkEqualType(te1.TRight, te2.TRight, exp));
+    } else if (isProcTExp(te1) && isProcTExp(te2)) {
+        // Handle procedure type unification
+        if (te1.paramTEs.length !== te2.paramTEs.length) {
+            return bind(unparseTExp(te1), (te1str: string) =>
+                   bind(unparseTExp(te2), (te2str: string) =>
+                        makeFailure<true>(`Incompatible procedure types: ${te1str} and ${te2str} in ${format(exp)}`)));
+        }
+        
+        // Check all parameter types
+        const paramChecks = zipWithResult((p1, p2) => checkEqualType(p1, p2, exp), te1.paramTEs, te2.paramTEs);
+        return bind(paramChecks, _ => checkEqualType(te1.returnTE, te2.returnTE, exp));
+    } else {
+        // Both are concrete types - use original logic
+        return equals(te1, te2) ? makeOk(true) :
+            bind(unparseTExp(te1), (te1: string) =>
+                bind(unparseTExp(te2), (te2: string) =>
+                    bind(unparse(exp), (exp: string) => 
+                        makeFailure<true>(`Incompatible types: ${te1} and ${te2} in ${exp}`))));
+    }
+};
 
 // Compute the type of L5 AST exps to TE
 // ===============================================
